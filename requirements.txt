@@ -30,3 +30,5 @@ click
 six
 celery[redis]
 openpyxl
+xlrd
+xlwt

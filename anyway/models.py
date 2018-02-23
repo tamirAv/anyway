@@ -713,3 +713,12 @@ class ReportPreferences(Base):
             "radius": self.radius,
             "minimum_severity": self.minimum_severity
         }
+
+
+class Code(Base):
+    __tablename__ = "codes"
+    var_name = Column(String())
+    code = Column(Integer())
+    description = Column(String())
+    file = Column(String())
+    id = Column(Integer(), primary_key=True)

@@ -13,12 +13,13 @@ from flask.ext.sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, and_
 
 from .. import field_names, localization
-from ..models import AccidentMarker, Involved, Vehicle
+from ..models import AccidentMarker, Involved, Vehicle, Code
 from .. import models
 from ..utilities import ItmToWGS84, init_flask, CsvReader, time_delta, decode_hebrew,ImporterUI,truncate_tables
 from functools import partial
 from .utils import batch_iterator
 import logging
+import xlrd
 
 failed_dirs = OrderedDict()
 
@@ -34,7 +35,7 @@ NON_URBAN_INTERSECTION = 'non_urban_intersection'
 DICTIONARY = "dictionary"
 INVOLVED = "involved"
 VEHICLES = "vehicles"
-
+CODES = 'codes'
 lms_files = {
     ACCIDENTS: "AccData.csv",
     URBAN_INTERSECTION: "IntersectUrban.csv",
@@ -42,7 +43,8 @@ lms_files = {
     STREETS: "DicStreets.csv",
     DICTIONARY: "Dictionary.csv",
     INVOLVED: "InvData.csv",
-    VEHICLES: "VehData.csv"
+    VEHICLES: "VehData.csv",
+    CODES: "AccCodebook.xls"
 }
 
 coordinates_converter = ItmToWGS84()
@@ -268,6 +270,19 @@ def import_accidents(provider_code, accidents, streets, roads, **kwargs):
     accidents.close()
 
 
+def import_codes(provider_code, codes, dictionary, **kwargs):
+    pass
+    for row in list(codes.get_rows())[4:]:
+        if row[2] and row[3]:
+            continue
+        yield {
+            'var_name': row[3],
+            'code': row[2],
+            'description': 123, #  TODO
+            'file': 213123 #  TODO
+        }
+
+
 def import_involved(provider_code, involved, **kwargs):
     logging.info("\tReading involved data from '%s'..." % os.path.basename(involved.name()))
     for involve in involved:
@@ -322,7 +337,7 @@ def import_vehicles(provider_code, vehicles, **kwargs):
 def get_files(directory):
     for name, filename in iteritems(lms_files):
 
-        if name not in (STREETS, NON_URBAN_INTERSECTION, ACCIDENTS, INVOLVED, VEHICLES):
+        if name not in (STREETS, NON_URBAN_INTERSECTION, ACCIDENTS, INVOLVED, VEHICLES, CODES, DICTIONARY):
             continue
 
         files = [path for path in os.listdir(directory)
@@ -333,7 +348,11 @@ def get_files(directory):
         if amount > 1:
             raise ValueError("Ambiguous: '%s'" % filename)
 
-        csv = CsvReader(os.path.join(directory, files[0]), encoding="cp1255")
+        if name == CODES:
+            xls = xlrd.open_workbook(os.path.join(directory, files[0]))
+            csv = xls.sheet_by_index(0) # Not really a CSV but a sheet object
+        else:
+            csv = CsvReader(os.path.join(directory, files[0]), encoding="cp1255")
 
         if name == STREETS:
             streets_map = {}
@@ -350,7 +369,7 @@ def get_files(directory):
                      field_names.road1 in x and field_names.road2 in x}
             csv.close()
             yield ROADS, roads
-        elif name in (ACCIDENTS, INVOLVED, VEHICLES):
+        elif name in (ACCIDENTS, INVOLVED, VEHICLES, CODES, DICTIONARY):
             yield name, csv
 
 
@@ -383,6 +402,17 @@ def import_to_datastore(directory, provider_code, batch_size):
             db.session.bulk_insert_mappings(AccidentMarker, accidents_chunk)
 
             new_items += len(accidents_chunk)
+
+        codes = (code for code
+                     in import_codes(provider_code=provider_code, **files_from_lms)
+                     if db.session.query(Code).filter(
+            and_(Code.code == code["code"],
+                 Code.file == code["file"],
+                 Code.var_name == code['var_name'])).scalar() is None)
+        for involved_chunk in batch_iterator(iterable=codes, batch_size=batch_size):
+            db.session.bulk_insert_mappings(Code, involved_chunk)
+            new_items += len(involved_chunk)
+
 
         if not new_ids:
             logging.info("\t\tNothing loaded, all accidents already in DB")
